@@ -3292,3 +3292,254 @@ fn build_outline(
 
     entries
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tracey_core::parse_rule_id;
+
+    // ── helpers ──────────────────────────────────────────────────────────
+
+    /// Shorthand: parse a rule id or panic.
+    fn rid(id: &str) -> RuleId {
+        parse_rule_id(id).unwrap()
+    }
+
+    /// Build a minimal `ApiRule` for propagation tests.
+    fn make_api_rule(id: &str, covered: bool, stale: bool) -> ApiRule {
+        let rule_id = rid(id);
+        ApiRule {
+            id: rule_id,
+            raw: String::new(),
+            html: String::new(),
+            status: None,
+            level: None,
+            source_file: None,
+            source_line: None,
+            source_column: None,
+            section: None,
+            section_title: None,
+            impl_refs: if covered {
+                vec![ApiCodeRef {
+                    file: "src/lib.rs".into(),
+                    line: 1,
+                }]
+            } else {
+                vec![]
+            },
+            verify_refs: vec![],
+            depends_refs: vec![],
+            is_stale: stale,
+            stale_refs: vec![],
+            is_derived: false,
+            derived_from: vec![],
+        }
+    }
+
+    // ── parse_satisfies_comment ──────────────────────────────────────────
+
+    #[test]
+    fn parse_satisfies_valid() {
+        let result = parse_satisfies_comment("r[satisfies sys.latency]");
+        let (prefix, rule_id) = result.unwrap();
+        assert_eq!(prefix, "r");
+        assert_eq!(rule_id, rid("sys.latency"));
+    }
+
+    #[test]
+    fn parse_satisfies_multi_char_prefix() {
+        let result = parse_satisfies_comment("abc[satisfies foo.bar]");
+        let (prefix, rule_id) = result.unwrap();
+        assert_eq!(prefix, "abc");
+        assert_eq!(rule_id, rid("foo.bar"));
+    }
+
+    #[test]
+    fn parse_satisfies_versioned() {
+        let result = parse_satisfies_comment("r[satisfies sys.latency+2]");
+        let (prefix, rule_id) = result.unwrap();
+        assert_eq!(prefix, "r");
+        assert_eq!(rule_id, rid("sys.latency+2"));
+    }
+
+    #[test]
+    fn parse_satisfies_rejects_invalid() {
+        // Uppercase prefix
+        assert!(parse_satisfies_comment("R[satisfies sys.latency]").is_none());
+        // Empty prefix
+        assert!(parse_satisfies_comment("[satisfies sys.latency]").is_none());
+        // Digit-first prefix
+        assert!(parse_satisfies_comment("1abc[satisfies sys.latency]").is_none());
+        // Missing `satisfies` keyword
+        assert!(parse_satisfies_comment("r[sys.latency]").is_none());
+        // No brackets at all
+        assert!(parse_satisfies_comment("r satisfies sys.latency").is_none());
+    }
+
+    // ── extract_satisfaction_edges ───────────────────────────────────────
+
+    /// Build a minimal `ExtractedRule` with the given span offset.
+    fn make_extracted_rule(span_offset: usize) -> crate::ExtractedRule {
+        crate::ExtractedRule {
+            def: marq::ReqDefinition {
+                id: marq::RuleId {
+                    base: format!("rule.at.{span_offset}"),
+                    version: 1,
+                },
+                anchor_id: String::new(),
+                marker_span: marq::SourceSpan::default(),
+                span: marq::SourceSpan {
+                    offset: span_offset,
+                    length: 0,
+                },
+                line: 1,
+                metadata: marq::ReqMetadata::default(),
+                raw: String::new(),
+                html: String::new(),
+            },
+            source_file: String::new(),
+            prefix: "c".into(),
+            column: None,
+            section: None,
+            section_title: None,
+            satisfies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn extract_edges_associates_nearest_preceding_rule() {
+        // Content layout:
+        //   offset 0: first rule definition
+        //   offset 20: second rule definition
+        //   offset 40: satisfies comment
+        let content = "AAAAAAAAAAAAAAAAAAAA\
+                        BBBBBBBBBBBBBBBBBBBB\
+                        <!-- r[satisfies sys.latency] -->";
+
+        let mut rules = vec![make_extracted_rule(0), make_extracted_rule(20)];
+
+        extract_satisfaction_edges(content, &mut rules);
+
+        // The comment at offset 40 should attach to the second rule (offset 20),
+        // not the first (offset 0).
+        assert!(rules[0].satisfies.is_empty());
+        assert_eq!(rules[1].satisfies.len(), 1);
+        assert_eq!(rules[1].satisfies[0].0, "r");
+        assert_eq!(rules[1].satisfies[0].1, rid("sys.latency"));
+    }
+
+    #[test]
+    fn extract_edges_ignores_comment_before_any_rule() {
+        // The satisfies comment appears before any rule definition offset.
+        let content = "<!-- r[satisfies sys.latency] -->AAAAAAAAAA";
+
+        let mut rules = vec![make_extracted_rule(32)];
+
+        extract_satisfaction_edges(content, &mut rules);
+
+        assert!(rules[0].satisfies.is_empty());
+    }
+
+    // ── propagate_derived_coverage ──────────────────────────────────────
+
+    fn make_propagation_fixtures(
+        decoder_covered: bool,
+        encoder_covered: bool,
+        encoder_stale: bool,
+    ) -> (
+        ApiConfig,
+        BTreeMap<ImplKey, ApiSpecForward>,
+        Vec<(String, RuleId, String, RuleId)>,
+    ) {
+        let api_config = ApiConfig {
+            project_root: String::new(),
+            specs: vec![
+                ApiSpecInfo {
+                    name: "system".into(),
+                    prefix: "r".into(),
+                    source: None,
+                    source_url: None,
+                    implementations: vec!["main".into()],
+                },
+                ApiSpecInfo {
+                    name: "component".into(),
+                    prefix: "c".into(),
+                    source: None,
+                    source_url: None,
+                    implementations: vec!["main".into()],
+                },
+            ],
+        };
+
+        let mut forward_by_impl: BTreeMap<ImplKey, ApiSpecForward> = BTreeMap::new();
+
+        // Parent spec: system / main — contains `sys.latency` (uncovered directly)
+        forward_by_impl.insert(
+            ("system".into(), "main".into()),
+            ApiSpecForward {
+                name: "system".into(),
+                rules: vec![make_api_rule("sys.latency", false, false)],
+            },
+        );
+
+        // Child spec: component / main — contains decoder + encoder
+        forward_by_impl.insert(
+            ("component".into(), "main".into()),
+            ApiSpecForward {
+                name: "component".into(),
+                rules: vec![
+                    make_api_rule("comp.decoder", decoder_covered, false),
+                    make_api_rule("comp.encoder", encoder_covered, encoder_stale),
+                ],
+            },
+        );
+
+        // Satisfaction edges: both children satisfy the parent
+        let edges = vec![
+            (
+                "component".into(),
+                rid("comp.decoder"),
+                "r".into(),
+                rid("sys.latency"),
+            ),
+            (
+                "component".into(),
+                rid("comp.encoder"),
+                "r".into(),
+                rid("sys.latency"),
+            ),
+        ];
+
+        (api_config, forward_by_impl, edges)
+    }
+
+    #[test]
+    fn propagate_all_children_covered() {
+        let (cfg, mut forward, edges) = make_propagation_fixtures(true, true, false);
+        propagate_derived_coverage(&cfg, &mut forward, &edges);
+
+        let parent = &forward[&("system".into(), "main".into())].rules[0];
+        assert!(parent.is_derived, "parent should be derived-covered");
+        let mut derived_bases: Vec<&str> = parent.derived_from.iter().map(|r| r.base.as_str()).collect();
+        derived_bases.sort();
+        assert_eq!(derived_bases, vec!["comp.decoder", "comp.encoder"]);
+    }
+
+    #[test]
+    fn propagate_child_uncovered() {
+        let (cfg, mut forward, edges) = make_propagation_fixtures(true, false, false);
+        propagate_derived_coverage(&cfg, &mut forward, &edges);
+
+        let parent = &forward[&("system".into(), "main".into())].rules[0];
+        assert!(!parent.is_derived, "parent should NOT be derived when a child is uncovered");
+    }
+
+    #[test]
+    fn propagate_child_stale() {
+        let (cfg, mut forward, edges) = make_propagation_fixtures(true, true, true);
+        propagate_derived_coverage(&cfg, &mut forward, &edges);
+
+        let parent = &forward[&("system".into(), "main".into())].rules[0];
+        assert!(!parent.is_derived, "parent should NOT be derived when a child is stale");
+    }
+}
