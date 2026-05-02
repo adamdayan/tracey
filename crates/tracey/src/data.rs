@@ -939,6 +939,161 @@ fn get_cached_spec_scan_paths(
     (entry.files.clone(), warnings, did_full_walk)
 }
 
+/// Extract satisfaction edges from markdown content.
+///
+/// Scans for HTML comment patterns like `<!-- PREFIX[satisfies REQ_ID] -->`
+/// and associates each annotation with the nearest preceding extracted requirement
+/// definition (by comparing byte offsets).
+pub fn extract_satisfaction_edges(
+    content: &str,
+    extracted: &mut [crate::ExtractedRule],
+) {
+    // Scan for <!-- ... --> comment blocks containing satisfies annotations
+    let bytes = content.as_bytes();
+    let mut i = 0;
+    while i + 4 < bytes.len() {
+        // Look for <!--
+        if bytes[i] == b'<' && bytes[i + 1] == b'!' && bytes[i + 2] == b'-' && bytes[i + 3] == b'-' {
+            let comment_start = i;
+            i += 4;
+            // Find -->
+            let comment_end = loop {
+                if i + 3 > bytes.len() {
+                    break None;
+                }
+                if bytes[i] == b'-' && bytes[i + 1] == b'-' && bytes[i + 2] == b'>' {
+                    break Some(i);
+                }
+                i += 1;
+            };
+            let Some(end) = comment_end else { break };
+            let comment_body = &content[comment_start + 4..end];
+            let comment_body = comment_body.trim();
+
+            // Try to parse PREFIX[satisfies REQ_ID] from the comment body
+            if let Some(edge) = parse_satisfies_comment(comment_body) {
+                let (parent_prefix, parent_rule_id) = edge;
+                // Find the extracted rule whose definition span offset is closest to
+                // (but not after) this annotation's byte offset
+                let best = extracted
+                    .iter_mut()
+                    .filter(|r| r.def.span.offset <= comment_start)
+                    .max_by_key(|r| r.def.span.offset);
+
+                if let Some(rule) = best {
+                    rule.satisfies.push((parent_prefix, parent_rule_id));
+                }
+            }
+
+            i = end + 3;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Parse a `PREFIX[satisfies REQ_ID]` pattern from an HTML comment body.
+/// Returns `(prefix, rule_id)` if valid.
+fn parse_satisfies_comment(body: &str) -> Option<(String, RuleId)> {
+    // Find the bracket
+    let bracket_pos = body.find('[')?;
+    let prefix = &body[..bracket_pos];
+
+    // Validate prefix: must be non-empty, lowercase alphanumeric
+    if prefix.is_empty() || !prefix.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
+        return None;
+    }
+    if !prefix.chars().next()?.is_ascii_lowercase() {
+        return None;
+    }
+
+    // Must end with ]
+    let close_bracket = body.rfind(']')?;
+    if close_bracket <= bracket_pos + 1 {
+        return None;
+    }
+
+    let inner = &body[bracket_pos + 1..close_bracket];
+    // Must start with "satisfies "
+    let inner = inner.strip_prefix("satisfies ")?;
+    let req_id_str = inner.trim();
+
+    parse_rule_id(req_id_str)
+        .map(|rule_id| (prefix.to_string(), rule_id))
+}
+
+/// Propagate derived coverage through satisfaction edges.
+///
+/// For each parent requirement referenced via `satisfies`, check if ALL child
+/// requirements that satisfy it are themselves implemented (have non-empty impl_refs
+/// and are not stale). If so, mark the parent as derived-covered.
+fn propagate_derived_coverage(
+    api_config: &ApiConfig,
+    forward_by_impl: &mut BTreeMap<ImplKey, ApiSpecForward>,
+    satisfaction_edges: &[(String, RuleId, String, RuleId)],
+) {
+    // Build prefix -> spec_name mapping
+    let mut prefix_to_spec_name: HashMap<String, String> = HashMap::new();
+    for spec_info in &api_config.specs {
+        prefix_to_spec_name.insert(spec_info.prefix.clone(), spec_info.name.clone());
+    }
+
+    // Build satisfaction graph: (parent_spec_name, parent_req_base) -> Vec<(child_spec_name, child_req_id)>
+    let mut satisfaction_graph: HashMap<(String, String), Vec<(String, RuleId)>> = HashMap::new();
+
+    for (child_spec_name, child_req_id, parent_prefix, parent_req_id) in satisfaction_edges {
+        let Some(parent_spec_name) = prefix_to_spec_name.get(parent_prefix) else {
+            continue; // unknown prefix, skip
+        };
+        satisfaction_graph
+            .entry((parent_spec_name.clone(), parent_req_id.base.clone()))
+            .or_default()
+            .push((child_spec_name.clone(), child_req_id.clone()));
+    }
+
+    // For each parent in the satisfaction graph, check if all children are implemented
+    for ((parent_spec_name, parent_req_base), children) in &satisfaction_graph {
+        // Check all children across all impls
+        // We need to check per impl_key: for each impl that contains the parent spec,
+        // check if all children are implemented in some impl
+        let parent_impl_keys: Vec<ImplKey> = forward_by_impl
+            .keys()
+            .filter(|(spec, _)| spec == parent_spec_name)
+            .cloned()
+            .collect();
+
+        for parent_impl_key in &parent_impl_keys {
+            let all_children_covered = children.iter().all(|(child_spec_name, child_req_id)| {
+                // Find any impl for this child spec where the child is covered
+                forward_by_impl
+                    .iter()
+                    .filter(|((spec, _), _)| spec == child_spec_name)
+                    .any(|(_, forward)| {
+                        forward.rules.iter().any(|r| {
+                            r.id.base == child_req_id.base
+                                && !r.impl_refs.is_empty()
+                                && !r.is_stale
+                        })
+                    })
+            });
+
+            if all_children_covered {
+                let child_ids: Vec<RuleId> = children.iter().map(|(_, id)| id.clone()).collect();
+                // Find and update the parent rule
+                if let Some(forward) = forward_by_impl.get_mut(parent_impl_key) {
+                    for rule in &mut forward.rules {
+                        if rule.id.base == *parent_req_base {
+                            rule.is_derived = true;
+                            rule.derived_from = child_ids.clone();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 async fn extract_markdown_rules_cached(
     project_root: &Path,
     path: &Path,
@@ -1049,9 +1204,13 @@ async fn extract_markdown_rules_cached(
                 column,
                 section,
                 section_title,
+                satisfies: Vec::new(),
             });
         }
     }
+
+    // Extract satisfaction edges from HTML comments in the markdown
+    extract_satisfaction_edges(&content, &mut extracted);
 
     cache.markdown_files.insert(
         canonical,
@@ -2201,6 +2360,7 @@ fn compute_impl_output(
                     RefVerb::Depends | RefVerb::Related => {
                         depends_refs.push(entry.code_ref.clone())
                     }
+                    RefVerb::Satisfies => {} // handled at spec level, not code level
                 },
                 RuleIdMatch::Stale => match entry.verb {
                     RefVerb::Impl | RefVerb::Define => {
@@ -2219,7 +2379,7 @@ fn compute_impl_output(
                             reference_id: entry.req_id.clone(),
                         });
                     }
-                    RefVerb::Depends | RefVerb::Related => {}
+                    RefVerb::Depends | RefVerb::Related | RefVerb::Satisfies => {}
                 },
                 RuleIdMatch::NoMatch => {}
             }
@@ -2245,6 +2405,8 @@ fn compute_impl_output(
             depends_refs,
             is_stale: !stale_refs.is_empty(),
             stale_refs,
+            is_derived: false,
+            derived_from: Vec::new(),
         });
     }
     api_rules.sort_by(|a, b| a.id.cmp(&b.id));
@@ -2393,6 +2555,8 @@ pub async fn build_dashboard_data_with_overlay_and_cache(
     let mut include_parse_failures_by_impl: BTreeMap<ImplKey, BTreeMap<PathBuf, String>> =
         BTreeMap::new();
     let total_impls: usize = config.specs.iter().map(|s| s.impls.len()).sum();
+    // Satisfaction edges: (child_spec_name, child_req_id, parent_spec_prefix, parent_req_id)
+    let mut all_satisfaction_edges: Vec<(String, RuleId, String, RuleId)> = Vec::new();
 
     info!(
         "dashboard build start version={} specs={} impls={} overlay_files={}",
@@ -2501,6 +2665,23 @@ pub async fn build_dashboard_data_with_overlay_and_cache(
             )
             .await?;
         total_extracted_rules += extracted_rules.len();
+
+        // Collect satisfaction edges from this spec's extracted rules
+        for extracted in &extracted_rules {
+            if !extracted.satisfies.is_empty() {
+                let Some(child_rule_id) = parse_rule_id(&extracted.def.id.to_string()) else {
+                    continue;
+                };
+                for (parent_prefix, parent_req_id) in &extracted.satisfies {
+                    all_satisfaction_edges.push((
+                        spec_name.clone(),
+                        child_rule_id.clone(),
+                        parent_prefix.clone(),
+                        parent_req_id.clone(),
+                    ));
+                }
+            }
+        }
 
         // Collect spec file contents for workspace diagnostics
         for spec_path in &spec_file_paths {
@@ -2753,6 +2934,11 @@ pub async fn build_dashboard_data_with_overlay_and_cache(
         );
     }
 
+    // Propagate derived coverage from satisfaction edges
+    if !all_satisfaction_edges.is_empty() {
+        propagate_derived_coverage(&api_config, &mut forward_by_impl, &all_satisfaction_edges);
+    }
+
     // Deduplicate search rules by ID
     all_search_rules.sort_by(|a, b| a.id.cmp(&b.id));
     all_search_rules.dedup_by(|a, b| a.id == b.id);
@@ -2998,6 +3184,8 @@ pub async fn render_spec_content_for_impl(
             "covered"
         } else if has_impl || has_verify {
             "partial"
+        } else if rule.is_derived {
+            "derived"
         } else {
             "uncovered"
         };

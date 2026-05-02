@@ -57,6 +57,8 @@ pub enum RefVerb {
     Depends,
     /// Loose connection - show when reviewing
     Related,
+    /// This requirement satisfies (covers) a parent requirement
+    Satisfies,
 }
 
 impl RefVerb {
@@ -68,6 +70,7 @@ impl RefVerb {
             "verify" => Some(RefVerb::Verify),
             "depends" => Some(RefVerb::Depends),
             "related" => Some(RefVerb::Related),
+            "satisfies" => Some(RefVerb::Satisfies),
             _ => None,
         }
     }
@@ -80,6 +83,7 @@ impl RefVerb {
             RefVerb::Verify => "verify",
             RefVerb::Depends => "depends",
             RefVerb::Related => "related",
+            RefVerb::Satisfies => "satisfies",
         }
     }
 }
@@ -197,6 +201,7 @@ pub(crate) fn extract_from_content(path: &Path, content: &str, reqs: &mut Reqs) 
                 "verify" => RefVerb::Verify,
                 "depends" => RefVerb::Depends,
                 "related" => RefVerb::Related,
+                "satisfies" => RefVerb::Satisfies,
                 _ => continue,
             };
             reqs.references.push(ReqReference {

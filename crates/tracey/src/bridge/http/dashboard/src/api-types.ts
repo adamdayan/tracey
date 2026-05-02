@@ -265,6 +265,15 @@ export interface ApiRule {
    * Stale references pointing to older versions of this rule.
    */
   staleRefs?: ApiStaleRef[];
+  /**
+   * True if this rule is covered via child requirement satisfaction
+   * (all child requirements that satisfy this rule are themselves implemented).
+   */
+  isDerived?: boolean;
+  /**
+   * Child requirement IDs that together satisfy this rule.
+   */
+  derivedFrom?: RuleId[];
 }
 
 /**

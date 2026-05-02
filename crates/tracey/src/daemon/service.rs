@@ -233,7 +233,7 @@ impl TraceyDaemon for TraceyService {
                     spec,
                     impl_name,
                     total_rules: s.total_rules,
-                    covered_rules: s.impl_covered,
+                    covered_rules: s.impl_covered + s.derived_covered,
                     stale_rules: s.stale_covered,
                     verified_rules: s.verify_covered,
                 })

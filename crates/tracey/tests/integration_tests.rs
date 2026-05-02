@@ -1372,3 +1372,80 @@ async fn test_test_include_counts_toward_verified() {
         impl_status.verified_rules
     );
 }
+
+// ============================================================================
+// Satisfies (Derived Coverage) Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_satisfies_derived_coverage() {
+    let service = create_test_service_named("satisfies").await;
+    let status = rpc(service.client.status().await);
+
+    // System spec should exist
+    let system_status = status
+        .impls
+        .iter()
+        .find(|i| i.spec == "system" && i.impl_name == "rust")
+        .expect("Expected system/rust impl");
+
+    // sys.latency should be derived-covered (both comp.decoder and comp.encoder are implemented)
+    // sys.throughput should NOT be derived-covered (comp.queue has no impl)
+    // So 1 out of 2 system rules should be covered
+    assert_eq!(
+        system_status.total_rules, 2,
+        "Expected 2 system rules"
+    );
+    assert_eq!(
+        system_status.covered_rules, 1,
+        "Expected 1 derived-covered system rule (sys.latency)"
+    );
+
+    // Component spec: 2 of 3 rules implemented
+    let component_status = status
+        .impls
+        .iter()
+        .find(|i| i.spec == "component" && i.impl_name == "rust")
+        .expect("Expected component/rust impl");
+
+    assert_eq!(
+        component_status.total_rules, 3,
+        "Expected 3 component rules"
+    );
+    assert_eq!(
+        component_status.covered_rules, 2,
+        "Expected 2 covered component rules (comp.decoder, comp.encoder)"
+    );
+}
+
+#[tokio::test]
+async fn test_satisfies_uncovered_list() {
+    let service = create_test_service_named("satisfies").await;
+
+    // sys.latency should NOT appear in uncovered list (it's derived-covered)
+    let req = UncoveredRequest {
+        spec: Some("system".to_string()),
+        impl_name: Some("rust".to_string()),
+        prefix: None,
+    };
+    let response = rpc(service.client.uncovered(req).await);
+
+    let all_uncovered_ids: Vec<String> = response
+        .by_section
+        .iter()
+        .flat_map(|s| &s.rules)
+        .map(|r| r.id.base.clone())
+        .collect();
+
+    assert!(
+        !all_uncovered_ids.contains(&"sys.latency".to_string()),
+        "sys.latency should NOT be uncovered (derived coverage), but found in uncovered list: {:?}",
+        all_uncovered_ids
+    );
+
+    assert!(
+        all_uncovered_ids.contains(&"sys.throughput".to_string()),
+        "sys.throughput SHOULD be uncovered (comp.queue not implemented), uncovered list: {:?}",
+        all_uncovered_ids
+    );
+}

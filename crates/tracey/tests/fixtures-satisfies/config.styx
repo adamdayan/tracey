@@ -1,0 +1,25 @@
+// Tracey configuration for satisfies integration tests
+
+specs (
+  {
+    name system
+    include (system-spec.md)
+    impls (
+      {
+        name rust
+        include (src/**/*.rs)
+      }
+    )
+  }
+
+  {
+    name component
+    include (component-spec.md)
+    impls (
+      {
+        name rust
+        include (src/**/*.rs)
+      }
+    )
+  }
+)

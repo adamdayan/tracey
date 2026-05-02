@@ -1784,7 +1784,7 @@ fn try_parse_full_ref(
     match chars.peek().map(|(_, c)| *c) {
         Some(' ') => {
             // Might be [verb req.id]
-            let verbs = ["impl", "verify", "define", "depends", "related"];
+            let verbs = ["impl", "verify", "define", "depends", "related", "satisfies"];
             if verbs.contains(&first_word.as_str()) {
                 let verb = first_word;
                 chars.next(); // consume space
@@ -1877,7 +1877,7 @@ fn try_parse_req_ref(
     match chars.peek().map(|(_, c)| *c) {
         Some(' ') => {
             // Might be [verb req.id]
-            let verbs = ["impl", "verify", "define", "depends", "related"];
+            let verbs = ["impl", "verify", "define", "depends", "related", "satisfies"];
             if verbs.contains(&first_word.as_str()) {
                 chars.next(); // consume space
 

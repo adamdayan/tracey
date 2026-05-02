@@ -34,6 +34,8 @@ pub struct ExtractedRule {
     pub section: Option<String>,
     /// Section title (heading text) that this rule belongs to
     pub section_title: Option<String>,
+    /// Parent requirements that this rule satisfies: (parent_spec_prefix, parent_req_id)
+    pub satisfies: Vec<(String, tracey_core::RuleId)>,
 }
 
 /// Compute 1-indexed column from byte offset in content
@@ -206,6 +208,7 @@ pub async fn load_rules_from_glob(
             }
 
             // Add requirements with their source file, computed column, and section
+            let rules_start = rules.len();
             for req in doc.reqs {
                 let column = Some(compute_column(&content, req.span.offset));
                 let prefix = extract_marker_prefix(&content, req.marker_span).ok_or_else(|| {
@@ -225,8 +228,12 @@ pub async fn load_rules_from_glob(
                     column,
                     section,
                     section_title,
+                    satisfies: Vec::new(),
                 });
             }
+
+            // Extract satisfaction edges from HTML comments
+            data::extract_satisfaction_edges(&content, &mut rules[rules_start..]);
         }
     }
 

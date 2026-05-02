@@ -97,6 +97,13 @@ pub struct ApiRule {
     /// Stale references pointing to older versions of this rule.
     #[facet(default)]
     pub stale_refs: Vec<ApiStaleRef>,
+    /// True if this rule is covered via child requirement satisfaction
+    /// (all child requirements that satisfy this rule are themselves implemented).
+    #[facet(default)]
+    pub is_derived: bool,
+    /// Child requirement IDs that together satisfy this rule.
+    #[facet(default)]
+    pub derived_from: Vec<RuleId>,
 }
 
 #[derive(Debug, Clone, Facet)]

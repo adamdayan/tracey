@@ -40,6 +40,8 @@ pub struct CoverageStats {
     pub stale_covered: usize,
     pub verify_covered: usize,
     pub fully_covered: usize, // both impl and verify
+    /// Rules covered via child requirement satisfaction (no direct impl refs).
+    pub derived_covered: usize,
     pub impl_percent: f64,
     pub verify_percent: f64,
 }
@@ -58,15 +60,22 @@ impl CoverageStats {
             .iter()
             .filter(|r| !r.is_stale && !r.impl_refs.is_empty() && !r.verify_refs.is_empty())
             .count();
+        // Rules covered via child satisfaction (no direct impl refs)
+        let derived_covered = rules
+            .iter()
+            .filter(|r| r.is_derived && r.impl_refs.is_empty())
+            .count();
 
+        let effective_covered = impl_covered + derived_covered;
         Self {
             total_rules: total,
             impl_covered,
             stale_covered,
             verify_covered,
             fully_covered,
+            derived_covered,
             impl_percent: if total > 0 {
-                (impl_covered as f64 / total as f64) * 100.0
+                (effective_covered as f64 / total as f64) * 100.0
             } else {
                 0.0
             },
@@ -253,10 +262,11 @@ impl<'a> QueryEngine<'a> {
         let stats = CoverageStats::from_rules(&forward.rules);
 
         // Filter uncovered rules, optionally by ID prefix (case-insensitive)
+        // Derived rules (covered via child satisfaction) are NOT uncovered
         let uncovered_rules: Vec<&ApiRule> = forward
             .rules
             .iter()
-            .filter(|r| r.impl_refs.is_empty())
+            .filter(|r| r.impl_refs.is_empty() && !r.is_derived)
             .filter(|r| {
                 prefix_filter
                     .map(|p| r.id.base.to_lowercase().starts_with(&p.to_lowercase()))
@@ -484,6 +494,7 @@ impl<'a> QueryEngine<'a> {
                         status: rule.status.clone(),
                         level: rule.level.clone(),
                         is_stale: rule.is_stale,
+                        is_derived: rule.is_derived,
                         coverage: Vec::new(), // Will be set at the end
                     });
                 }
@@ -619,6 +630,8 @@ pub struct RuleInfo {
     pub level: Option<String>,
     /// True if any reference to this rule is stale
     pub is_stale: bool,
+    /// True if this rule is covered via child requirement satisfaction
+    pub is_derived: bool,
     /// Coverage across all implementations
     pub coverage: Vec<ImplCoverage>,
 }
@@ -626,7 +639,7 @@ pub struct RuleInfo {
 impl RuleInfo {
     /// Check if this rule has any implementation references across all impls
     pub fn has_any_impl(&self) -> bool {
-        self.coverage.iter().any(|c| !c.impl_refs.is_empty())
+        self.coverage.iter().any(|c| !c.impl_refs.is_empty()) || self.is_derived
     }
 
     /// Check if this rule has any verification references across all impls
