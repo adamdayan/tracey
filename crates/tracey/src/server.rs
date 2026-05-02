@@ -304,7 +304,11 @@ impl<'a> QueryEngine<'a> {
         let untested_rules: Vec<&ApiRule> = forward
             .rules
             .iter()
-            .filter(|r| !r.impl_refs.is_empty() && r.verify_refs.is_empty())
+            .filter(|r| {
+                // A rule is "untested" if it is covered (either directly via impl_refs or derived)
+                // but lacks verification refs
+                (!r.impl_refs.is_empty() || r.is_derived) && r.verify_refs.is_empty()
+            })
             .filter(|r| {
                 prefix_filter
                     .map(|p| r.id.base.to_lowercase().starts_with(&p.to_lowercase()))
