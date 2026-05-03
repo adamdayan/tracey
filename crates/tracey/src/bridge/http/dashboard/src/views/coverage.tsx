@@ -89,7 +89,7 @@ export function CoverageView({
 			rules = rules.filter((r) => inferLevel(r) === level);
 		}
 		const total = rules.length;
-		const impl = rules.filter((r) => r.implRefs.length > 0).length;
+		const impl = rules.filter((r) => r.implRefs.length > 0 || r.isDerived).length;
 		const verify = rules.filter((r) => r.verifyRefs.length > 0).length;
 		return {
 			total,

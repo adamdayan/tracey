@@ -168,6 +168,7 @@ struct RuleCoverage {
     status: &'static str, // "covered", "partial", "stale", "uncovered"
     impl_refs: Vec<ApiCodeRef>,
     verify_refs: Vec<ApiCodeRef>,
+    is_derived: bool,
 }
 
 /// Custom rule handler that renders rules with coverage status and refs
@@ -3195,6 +3196,7 @@ pub async fn render_spec_content_for_impl(
                 status,
                 impl_refs: rule.impl_refs.clone(),
                 verify_refs: rule.verify_refs.clone(),
+                is_derived: rule.is_derived,
             },
         );
     }
@@ -3242,7 +3244,7 @@ fn build_outline(
             DocElement::Req(r) => {
                 if let Some(idx) = current_heading_idx {
                     let cov = coverage.get(&r.id.to_string());
-                    let has_impl = cov.is_some_and(|c| !c.impl_refs.is_empty());
+                    let has_impl = cov.is_some_and(|c| !c.impl_refs.is_empty() || c.is_derived);
                     let has_verify = cov.is_some_and(|c| !c.verify_refs.is_empty());
 
                     entries[idx].coverage.total += 1;
