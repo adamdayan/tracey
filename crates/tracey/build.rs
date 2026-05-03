@@ -188,14 +188,6 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
 
 fn build_dashboard() {
     let out_dir = std::env::var("OUT_DIR").unwrap();
-    let dashboard_out = std::path::Path::new(&out_dir).join("dashboard");
-    let dist_dir = dashboard_out.join("dist");
-    std::fs::create_dir_all(dist_dir.join("assets")).unwrap();
-    std::fs::write(dist_dir.join("index.html"), "").unwrap();
-    std::fs::write(dist_dir.join("assets/index.js"), "").unwrap();
-    std::fs::write(dist_dir.join("assets/index.css"), "").unwrap();
-    return;
-    let out_dir = std::env::var("OUT_DIR").unwrap();
     let dashboard_src = Path::new("src/bridge/http/dashboard");
     let dashboard_out = Path::new(&out_dir).join("dashboard");
     let dist_dir = dashboard_out.join("dist");
