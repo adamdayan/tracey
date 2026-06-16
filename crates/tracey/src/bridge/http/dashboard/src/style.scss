@@ -1818,7 +1818,6 @@
 
         &.req-covered {
             border-color: var(--border);
-            opacity: 0.5;
             --req-badge-bg: var(--status-covered-bg);
             --req-badge-color: var(--status-covered-fg);
             --req-badge-weight: 500;
@@ -1829,7 +1828,6 @@
 
             &::before {
                 background: var(--green);
-                opacity: 0.5;
             }
         }
 

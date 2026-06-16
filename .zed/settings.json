@@ -5,7 +5,13 @@
 {
   "languages": {
     "Rust": {
-      "language_servers": ["rust-analyzer", "tracey-lsp"],
+      "language_servers": [
+        "rust-analyzer",
+        "tracey-lsp"
+      ],
     },
+    "SCSS": {
+      "format_on_save": "off"
+    }
   },
 }
