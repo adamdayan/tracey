@@ -265,7 +265,7 @@ impl<'a> QueryEngine<'a> {
             .collect();
 
         // Build section mapping from outline
-        let by_section = group_rules_by_section(&uncovered_rules);
+        let by_section = group_rules_by_section(&uncovered_rules, |_| None);
 
         Some(UncoveredResult {
             spec: spec.to_string(),
@@ -302,7 +302,7 @@ impl<'a> QueryEngine<'a> {
             })
             .collect();
 
-        let by_section = group_rules_by_section(&untested_rules);
+        let by_section = group_rules_by_section(&untested_rules, |_| None);
 
         Some(UntestedResult {
             spec: spec.to_string(),
@@ -314,12 +314,13 @@ impl<'a> QueryEngine<'a> {
         })
     }
 
-    /// Get every rule for a spec/impl with body text populated.
+    /// Get every rule for a spec/impl, grouped by section.
     ///
-    /// Designed for machine-readable export (e.g. syncing requirements to an
-    /// external tracker). Unlike `uncovered`/`untested`, this populates each
-    /// `RuleRef.text` so callers do not need to issue a follow-up `rule()` call
-    /// per rule.
+    /// Unlike `uncovered`/`untested`, this also populates each `RuleRef.text`
+    /// with the rule's raw markdown body — intended for machine-readable
+    /// export (e.g. syncing requirements to an external tracker) where the
+    /// caller wants every rule's body without issuing a follow-up `rule()`
+    /// call per rule.
     pub fn all(
         &self,
         spec: &str,
@@ -339,7 +340,7 @@ impl<'a> QueryEngine<'a> {
             })
             .collect();
 
-        let by_section = group_rules_by_section_with_text(&rules);
+        let by_section = group_rules_by_section(&rules, |r| Some(r.raw.clone()));
 
         Some(AllResult {
             spec: spec.to_string(),
@@ -693,17 +694,9 @@ impl RuleInfo {
 // Helpers
 // ============================================================================
 
-fn group_rules_by_section(rules: &[&ApiRule]) -> BTreeMap<String, Vec<RuleRef>> {
-    group_rules_by_section_inner(rules, false)
-}
-
-fn group_rules_by_section_with_text(rules: &[&ApiRule]) -> BTreeMap<String, Vec<RuleRef>> {
-    group_rules_by_section_inner(rules, true)
-}
-
-fn group_rules_by_section_inner(
+fn group_rules_by_section(
     rules: &[&ApiRule],
-    include_text: bool,
+    extract_text: impl Fn(&ApiRule) -> Option<String>,
 ) -> BTreeMap<String, Vec<RuleRef>> {
     let mut result: BTreeMap<String, Vec<RuleRef>> = BTreeMap::new();
 
@@ -717,11 +710,7 @@ fn group_rules_by_section_inner(
         result.entry(section).or_default().push(RuleRef {
             id: rule.id.clone(),
             impl_refs: rule.impl_refs.clone(),
-            text: if include_text {
-                Some(rule.raw.clone())
-            } else {
-                None
-            },
+            text: extract_text(rule),
         });
     }
 

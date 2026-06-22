@@ -368,7 +368,7 @@ impl QueryClient {
         self.with_config_banner(output).await
     }
 
-    /// List every rule in a spec/impl with body text.
+    /// List every rule in a spec/impl, grouped by section.
     pub async fn all(&self, spec_impl: Option<&str>, prefix: Option<&str>) -> String {
         let (spec, impl_name) = match self.checked_spec_impl(spec_impl).await {
             Ok(values) => values,
@@ -401,7 +401,7 @@ impl QueryClient {
                 output.push_str("---\n");
                 output.push_str(&self.hint(
                     "tracey query all",
-                    "tracey query to list all rules with body text",
+                    "tracey query to list every rule grouped by section",
                 ));
 
                 output
